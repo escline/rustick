@@ -3,16 +3,45 @@
 use chrono::Local;
 use eframe::egui;
 use egui::{Align2, Color32, CornerRadius, FontId, Frame, Margin, Pos2, Sense, Stroke, Vec2};
+use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
-const TIME_COLOR: Color32 = Color32::from_rgb(0, 240, 255);
+// Palette sampled from the app icon
+const TIME_COLOR:  Color32 = Color32::from_rgb(225, 88,  20); // bright burnt orange
+const BG_DARK:     Color32 = Color32::from_rgb( 22,  9,   0); // near-black warm brown
+const BG_MENU:     Color32 = Color32::from_rgb( 32, 13,   0); // slightly lighter for menu
+const BORDER_COL:  Color32 = Color32::from_rgb(115, 48,  12); // dark burnt orange border
+const DATE_COLOR:  Color32 = Color32::from_rgb(118, 72,  30); // muted warm brown
+const PIN_COLOR:   Color32 = Color32::from_rgb(200, 68,  16); // pin indicator
+
+#[cfg(has_icon_png)]
+fn load_icon() -> Option<egui::IconData> {
+    let bytes = include_bytes!("../assets/icon.png");
+    image::load_from_memory(bytes).ok().map(|img| {
+        let img = img.into_rgba8();
+        let (w, h) = (img.width(), img.height());
+        egui::IconData { rgba: img.into_raw(), width: w, height: h }
+    })
+}
+
+#[cfg(not(has_icon_png))]
+fn load_icon() -> Option<egui::IconData> {
+    None
+}
 
 fn main() -> eframe::Result<()> {
     let options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default()
-            .with_title("Rustick")
-            .with_inner_size([320.0, 140.0])
-            .with_min_inner_size([240.0, 100.0]),
+        persist_window: true,
+        viewport: {
+            let mut vp = egui::ViewportBuilder::default()
+                .with_title("Rustick")
+                .with_inner_size([320.0, 140.0])
+                .with_min_inner_size([240.0, 100.0]);
+            if let Some(icon) = load_icon() {
+                vp = vp.with_icon(icon);
+            }
+            vp
+        },
         ..Default::default()
     };
 
@@ -21,12 +50,15 @@ fn main() -> eframe::Result<()> {
         options,
         Box::new(|cc| {
             cc.egui_ctx.set_visuals(egui::Visuals::dark());
-            Ok(Box::new(ClockApp::default()))
+            let app: ClockApp = cc.storage
+                .and_then(|s| eframe::get_value(s, eframe::APP_KEY))
+                .unwrap_or_default();
+            Ok(Box::new(app))
         }),
     )
 }
 
-#[derive(Default, Clone, Copy, PartialEq)]
+#[derive(Default, Clone, Copy, PartialEq, Serialize, Deserialize)]
 enum DisplayMode {
     #[default]
     Normal,
@@ -48,15 +80,19 @@ impl DisplayMode {
     }
 }
 
-#[derive(Default)]
+#[derive(Default, Serialize, Deserialize)]
 struct ClockApp {
     always_on_top: bool,
     display_mode: DisplayMode,
+    // These fields are runtime-only and must not be persisted
+    #[serde(skip)]
     applied_always_on_top: Option<bool>,
+    #[serde(skip)]
     applied_display_mode: Option<DisplayMode>,
-    // Floating context menu popup state
-    popup_pos: Option<Pos2>, // screen coordinates; Some = menu is open
-    popup_frames: u32,       // frames since popup opened (used for focus-loss detection)
+    #[serde(skip)]
+    popup_pos: Option<Pos2>,
+    #[serde(skip)]
+    popup_frames: u32,
 }
 
 #[derive(Clone, Copy)]
@@ -66,6 +102,10 @@ enum Action {
 }
 
 impl eframe::App for ClockApp {
+    fn save(&mut self, storage: &mut dyn eframe::Storage) {
+        eframe::set_value(storage, eframe::APP_KEY, self);
+    }
+
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         let now = Local::now();
         let ms_remaining = 1000 - now.timestamp_subsec_millis();
@@ -127,7 +167,7 @@ impl eframe::App for ClockApp {
                 egui::ViewportId::from_hash_of("context_popup"),
                 egui::ViewportBuilder::default()
                     .with_decorations(false)
-                    .with_inner_size([185.0, 148.0])
+                    .with_inner_size([185.0, 130.0])
                     .with_position(popup_pos)
                     .with_resizable(false)
                     .with_window_level(egui::viewport::WindowLevel::AlwaysOnTop),
@@ -140,21 +180,22 @@ impl eframe::App for ClockApp {
                         close_menu = true;
                     }
 
-                    let bg = Color32::from_rgb(25, 25, 38);
-                    let border = Color32::from_rgb(70, 70, 95);
-
                     egui::CentralPanel::default()
                         .frame(
                             Frame::new()
-                                .fill(bg)
-                                .stroke(Stroke::new(1.0, border))
+                                .fill(BG_MENU)
+                                .stroke(Stroke::new(1.0, BORDER_COL))
                                 .inner_margin(Margin::same(4)),
                         )
                         .show(ctx, |ui| {
                             ui.set_min_width(175.0);
-                            // Remove button fill so items blend with the panel background
+                            // Buttons blend with the menu background; keep a warm hover highlight
                             ui.visuals_mut().widgets.inactive.weak_bg_fill = Color32::TRANSPARENT;
                             ui.visuals_mut().widgets.inactive.bg_fill = Color32::TRANSPARENT;
+                            ui.visuals_mut().widgets.hovered.weak_bg_fill =
+                                Color32::from_rgb(80, 32, 8);
+                            ui.visuals_mut().widgets.active.weak_bg_fill =
+                                Color32::from_rgb(110, 44, 10);
 
                             let aot_label = if always_on_top {
                                 "✔  Always on Top"
@@ -211,11 +252,9 @@ impl eframe::App for ClockApp {
 }
 
 fn show_normal(ctx: &egui::Context, time_str: &str, date_str: &str, always_on_top: bool) {
-    let bg = Color32::from_rgb(15, 15, 25);
-    let date_color = Color32::from_rgb(110, 110, 130);
 
     egui::CentralPanel::default()
-        .frame(Frame::new().fill(bg))
+        .frame(Frame::new().fill(BG_DARK))
         .show(ctx, |ui| {
             let rect = ui.available_rect_before_wrap();
             // Allocate the full rect so drag-to-move works in compact (not used in normal,
@@ -237,7 +276,7 @@ fn show_normal(ctx: &egui::Context, time_str: &str, date_str: &str, always_on_to
                 Align2::CENTER_CENTER,
                 date_str,
                 FontId::proportional(14.0),
-                date_color,
+                DATE_COLOR,
             );
 
             if always_on_top {
@@ -246,21 +285,18 @@ fn show_normal(ctx: &egui::Context, time_str: &str, date_str: &str, always_on_to
                     Align2::RIGHT_TOP,
                     "📌",
                     FontId::proportional(12.0),
-                    Color32::from_rgb(200, 180, 80),
+                    PIN_COLOR,
                 );
             }
         });
 }
 
 fn show_compact(ctx: &egui::Context, time_str: &str) {
-    let bg = Color32::from_rgb(15, 15, 25);
-    let border = Color32::from_rgb(60, 60, 90);
-
     egui::CentralPanel::default()
         .frame(
             Frame::new()
-                .fill(bg)
-                .stroke(Stroke::new(1.5, border))
+                .fill(BG_DARK)
+                .stroke(Stroke::new(1.5, BORDER_COL))
                 .corner_radius(CornerRadius::same(5))
                 .inner_margin(Margin::symmetric(12, 8)),
         )
@@ -283,14 +319,11 @@ fn show_compact(ctx: &egui::Context, time_str: &str) {
 }
 
 fn show_tiny(ctx: &egui::Context, time_str: &str) {
-    let bg = Color32::from_rgb(15, 15, 25);
-    let border = Color32::from_rgb(60, 60, 90);
-
     egui::CentralPanel::default()
         .frame(
             Frame::new()
-                .fill(bg)
-                .stroke(Stroke::new(1.0, border))
+                .fill(BG_DARK)
+                .stroke(Stroke::new(1.0, BORDER_COL))
                 .corner_radius(CornerRadius::same(3))
                 .inner_margin(Margin::symmetric(5, 2)),
         )
