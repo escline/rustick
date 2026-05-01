@@ -1,0 +1,17 @@
+[package]
+name = "rustick"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "rustick"
+path = "src/main.rs"
+
+[dependencies]
+eframe = "0.31"
+egui = "0.31"
+chrono = { version = "0.4", features = ["clock"] }
+
+[profile.release]
+opt-level = 3
+strip = true
