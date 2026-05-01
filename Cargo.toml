@@ -13,5 +13,8 @@ egui = "0.31"
 chrono = { version = "0.4", features = ["clock"] }
 
 [profile.release]
-opt-level = 3
-strip = true
+opt-level = "z"    # optimize for size, not speed
+lto = true         # remove dead code across all crates
+codegen-units = 1  # single unit allows better cross-function optimization
+panic = "abort"    # drop panic unwinding machinery
+strip = true       # strip debug symbols from the binary
