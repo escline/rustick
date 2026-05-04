@@ -13,6 +13,7 @@ egui = "0.31"
 chrono = { version = "0.4", features = ["clock"] }
 image = { version = "0.25", default-features = false, features = ["png"] }
 serde = { version = "1", features = ["derive"] }
+winreg = "0.10"
 
 [build-dependencies]
 winres = "0.1"

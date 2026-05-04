@@ -6,13 +6,108 @@ use egui::{Align2, Color32, CornerRadius, FontId, Frame, Margin, Pos2, Sense, St
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
-// Palette sampled from the app icon
-const TIME_COLOR:  Color32 = Color32::from_rgb(225, 88,  20); // bright burnt orange
-const BG_DARK:     Color32 = Color32::from_rgb( 22,  9,   0); // near-black warm brown
-const BG_MENU:     Color32 = Color32::from_rgb( 32, 13,   0); // slightly lighter for menu
-const BORDER_COL:  Color32 = Color32::from_rgb(115, 48,  12); // dark burnt orange border
-const DATE_COLOR:  Color32 = Color32::from_rgb(118, 72,  30); // muted warm brown
-const PIN_COLOR:   Color32 = Color32::from_rgb(200, 68,  16); // pin indicator
+// --- Color scheme ---
+
+fn scale_color(c: Color32, f: f32) -> Color32 {
+    Color32::from_rgb(
+        (c.r() as f32 * f).min(255.0) as u8,
+        (c.g() as f32 * f).min(255.0) as u8,
+        (c.b() as f32 * f).min(255.0) as u8,
+    )
+}
+
+fn lerp_color(a: Color32, b: Color32, t: f32) -> Color32 {
+    Color32::from_rgb(
+        (a.r() as f32 + (b.r() as f32 - a.r() as f32) * t) as u8,
+        (a.g() as f32 + (b.g() as f32 - a.g() as f32) * t) as u8,
+        (a.b() as f32 + (b.b() as f32 - a.b() as f32) * t) as u8,
+    )
+}
+
+#[derive(Clone, Copy)]
+struct ColorScheme {
+    time_color: Color32,
+    bg_dark: Color32,
+    bg_menu: Color32,
+    border_col: Color32,
+    date_color: Color32,
+    pin_color: Color32,
+    hover_color: Color32,
+    active_color: Color32,
+}
+
+impl Default for ColorScheme {
+    fn default() -> Self {
+        // Fallback: original burnt-orange palette sampled from the app icon
+        Self::from_accent(Color32::from_rgb(225, 88, 20), false)
+    }
+}
+
+impl ColorScheme {
+    fn from_accent(accent: Color32, light_mode: bool) -> Self {
+        if light_mode {
+            let text = scale_color(accent, 0.70); // darken for contrast on light bg
+            Self {
+                time_color: text,
+                bg_dark: Color32::from_rgb(245, 245, 245),
+                bg_menu: Color32::from_rgb(232, 232, 232),
+                border_col: scale_color(accent, 0.55),
+                date_color: Color32::from_rgb(90, 90, 90),
+                pin_color: text,
+                hover_color: lerp_color(Color32::from_rgb(220, 220, 220), accent, 0.20),
+                active_color: lerp_color(Color32::from_rgb(200, 200, 200), accent, 0.25),
+            }
+        } else {
+            Self {
+                time_color: accent,
+                bg_dark: scale_color(accent, 0.07),
+                bg_menu: scale_color(accent, 0.12),
+                border_col: scale_color(accent, 0.45),
+                date_color: scale_color(accent, 0.50),
+                pin_color: scale_color(accent, 0.88),
+                hover_color: scale_color(accent, 0.30),
+                active_color: scale_color(accent, 0.42),
+            }
+        }
+    }
+
+    fn from_windows() -> Self {
+        let accent = read_accent_color().unwrap_or(Color32::from_rgb(225, 88, 20));
+        let light_mode = read_light_mode();
+        Self::from_accent(accent, light_mode)
+    }
+}
+
+fn read_accent_color() -> Option<Color32> {
+    use winreg::enums::HKEY_CURRENT_USER;
+    let hkcu = winreg::RegKey::predef(HKEY_CURRENT_USER);
+    let dwm = hkcu.open_subkey("Software\\Microsoft\\Windows\\DWM").ok()?;
+    // Prefer AccentColor; fall back to ColorizationColor
+    let raw: u32 = dwm
+        .get_value("AccentColor")
+        .or_else(|_| dwm.get_value("ColorizationColor"))
+        .ok()?;
+    // Windows stores as 0xAABBGGRR
+    Some(Color32::from_rgb(
+        (raw & 0xFF) as u8,
+        ((raw >> 8) & 0xFF) as u8,
+        ((raw >> 16) & 0xFF) as u8,
+    ))
+}
+
+fn read_light_mode() -> bool {
+    use winreg::enums::HKEY_CURRENT_USER;
+    let hkcu = winreg::RegKey::predef(HKEY_CURRENT_USER);
+    hkcu.open_subkey(
+        "Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize",
+    )
+    .ok()
+    .and_then(|k| k.get_value::<u32, _>("AppsUseLightTheme").ok())
+    .map(|v| v != 0)
+    .unwrap_or(false)
+}
+
+// --- Icon loading ---
 
 #[cfg(has_icon_png)]
 fn load_icon() -> Option<egui::IconData> {
@@ -49,7 +144,12 @@ fn main() -> eframe::Result<()> {
         "Rustick",
         options,
         Box::new(|cc| {
-            cc.egui_ctx.set_visuals(egui::Visuals::dark());
+            let light_mode = read_light_mode();
+            cc.egui_ctx.set_visuals(if light_mode {
+                egui::Visuals::light()
+            } else {
+                egui::Visuals::dark()
+            });
             let app: ClockApp = cc.storage
                 .and_then(|s| eframe::get_value(s, eframe::APP_KEY))
                 .unwrap_or_default();
@@ -85,7 +185,6 @@ struct ClockApp {
     always_on_top: bool,
     display_mode: DisplayMode,
     show_seconds: bool,
-    // These fields are runtime-only and must not be persisted
     #[serde(skip)]
     applied_always_on_top: Option<bool>,
     #[serde(skip)]
@@ -94,6 +193,8 @@ struct ClockApp {
     popup_pos: Option<Pos2>,
     #[serde(skip)]
     popup_frames: u32,
+    #[serde(skip)]
+    colors: Option<ColorScheme>,
 }
 
 #[derive(Clone, Copy)]
@@ -125,6 +226,8 @@ impl eframe::App for ClockApp {
         };
         let date_str = now.format("%a, %b %d %Y").to_string();
 
+        let colors = *self.colors.get_or_insert_with(ColorScheme::from_windows);
+
         if self.applied_always_on_top != Some(self.always_on_top) {
             ctx.send_viewport_cmd(egui::ViewportCommand::WindowLevel(
                 if self.always_on_top {
@@ -147,14 +250,13 @@ impl eframe::App for ClockApp {
         }
 
         match self.display_mode {
-            DisplayMode::Normal => show_normal(ctx, &time_str, &date_str, self.always_on_top),
-            DisplayMode::Compact => show_compact(ctx, &time_str),
-            DisplayMode::Tiny => show_tiny(ctx, &time_str),
+            DisplayMode::Normal => {
+                show_normal(ctx, &time_str, &date_str, self.always_on_top, &colors)
+            }
+            DisplayMode::Compact => show_compact(ctx, &time_str, &colors),
+            DisplayMode::Tiny => show_tiny(ctx, &time_str, &colors),
         }
 
-        // Detect right-click in any mode and open the floating popup menu.
-        // show_viewport_immediate creates a real OS-level window so the menu
-        // is never clipped by the small clock window bounds.
         if ctx.input(|i| i.pointer.secondary_clicked()) {
             let screen_pos = ctx.input(|i| {
                 let inner_origin = i.viewport().inner_rect.map(|r| r.min).unwrap_or(Pos2::ZERO);
@@ -183,7 +285,6 @@ impl eframe::App for ClockApp {
                     .with_resizable(false)
                     .with_window_level(egui::viewport::WindowLevel::AlwaysOnTop),
                 |ctx, _class| {
-                    // Close when focus moves elsewhere (give a few frames to gain focus first)
                     if frames > 3 && ctx.input(|i| i.viewport().focused == Some(false)) {
                         close_menu = true;
                     }
@@ -194,19 +295,17 @@ impl eframe::App for ClockApp {
                     egui::CentralPanel::default()
                         .frame(
                             Frame::new()
-                                .fill(BG_MENU)
-                                .stroke(Stroke::new(1.0, BORDER_COL))
+                                .fill(colors.bg_menu)
+                                .stroke(Stroke::new(1.0, colors.border_col))
                                 .inner_margin(Margin::same(4)),
                         )
                         .show(ctx, |ui| {
                             ui.set_min_width(175.0);
-                            // Buttons blend with the menu background; keep a warm hover highlight
-                            ui.visuals_mut().widgets.inactive.weak_bg_fill = Color32::TRANSPARENT;
+                            ui.visuals_mut().widgets.inactive.weak_bg_fill =
+                                Color32::TRANSPARENT;
                             ui.visuals_mut().widgets.inactive.bg_fill = Color32::TRANSPARENT;
-                            ui.visuals_mut().widgets.hovered.weak_bg_fill =
-                                Color32::from_rgb(80, 32, 8);
-                            ui.visuals_mut().widgets.active.weak_bg_fill =
-                                Color32::from_rgb(110, 44, 10);
+                            ui.visuals_mut().widgets.hovered.weak_bg_fill = colors.hover_color;
+                            ui.visuals_mut().widgets.active.weak_bg_fill = colors.active_color;
 
                             let aot_label = if always_on_top {
                                 "✔  Always on Top"
@@ -260,21 +359,23 @@ impl eframe::App for ClockApp {
             }
         }
 
-        // Left-click toggles seconds display (guard against clicks that dismiss the menu)
         if self.popup_pos.is_none() && ctx.input(|i| i.pointer.primary_clicked()) {
             self.show_seconds = !self.show_seconds;
         }
     }
 }
 
-fn show_normal(ctx: &egui::Context, time_str: &str, date_str: &str, always_on_top: bool) {
-
+fn show_normal(
+    ctx: &egui::Context,
+    time_str: &str,
+    date_str: &str,
+    always_on_top: bool,
+    colors: &ColorScheme,
+) {
     egui::CentralPanel::default()
-        .frame(Frame::new().fill(BG_DARK))
+        .frame(Frame::new().fill(colors.bg_dark))
         .show(ctx, |ui| {
             let rect = ui.available_rect_before_wrap();
-            // Allocate the full rect so drag-to-move works in compact (not used in normal,
-            // but keeps the pattern consistent and prevents egui from inserting extra padding).
             let _ = ui.allocate_rect(rect, Sense::hover());
             let painter = ui.painter();
             let center = rect.center();
@@ -284,7 +385,7 @@ fn show_normal(ctx: &egui::Context, time_str: &str, date_str: &str, always_on_to
                 Align2::CENTER_CENTER,
                 time_str,
                 FontId::monospace(48.0),
-                TIME_COLOR,
+                colors.time_color,
             );
 
             painter.text(
@@ -292,7 +393,7 @@ fn show_normal(ctx: &egui::Context, time_str: &str, date_str: &str, always_on_to
                 Align2::CENTER_CENTER,
                 date_str,
                 FontId::proportional(14.0),
-                DATE_COLOR,
+                colors.date_color,
             );
 
             if always_on_top {
@@ -301,18 +402,18 @@ fn show_normal(ctx: &egui::Context, time_str: &str, date_str: &str, always_on_to
                     Align2::RIGHT_TOP,
                     "📌",
                     FontId::proportional(12.0),
-                    PIN_COLOR,
+                    colors.pin_color,
                 );
             }
         });
 }
 
-fn show_compact(ctx: &egui::Context, time_str: &str) {
+fn show_compact(ctx: &egui::Context, time_str: &str, colors: &ColorScheme) {
     egui::CentralPanel::default()
         .frame(
             Frame::new()
-                .fill(BG_DARK)
-                .stroke(Stroke::new(1.5, BORDER_COL))
+                .fill(colors.bg_dark)
+                .stroke(Stroke::new(1.5, colors.border_col))
                 .corner_radius(CornerRadius::same(5))
                 .inner_margin(Margin::symmetric(12, 8)),
         )
@@ -329,17 +430,17 @@ fn show_compact(ctx: &egui::Context, time_str: &str) {
                 Align2::CENTER_CENTER,
                 time_str,
                 FontId::monospace(32.0),
-                TIME_COLOR,
+                colors.time_color,
             );
         });
 }
 
-fn show_tiny(ctx: &egui::Context, time_str: &str) {
+fn show_tiny(ctx: &egui::Context, time_str: &str, colors: &ColorScheme) {
     egui::CentralPanel::default()
         .frame(
             Frame::new()
-                .fill(BG_DARK)
-                .stroke(Stroke::new(1.0, BORDER_COL))
+                .fill(colors.bg_dark)
+                .stroke(Stroke::new(1.0, colors.border_col))
                 .corner_radius(CornerRadius::same(3))
                 .inner_margin(Margin::symmetric(5, 2)),
         )
@@ -356,7 +457,7 @@ fn show_tiny(ctx: &egui::Context, time_str: &str) {
                 Align2::CENTER_CENTER,
                 time_str,
                 FontId::monospace(16.0),
-                TIME_COLOR,
+                colors.time_color,
             );
         });
 }
