@@ -1,6 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use chrono::Local;
+use chrono::{Local, Timelike};
 use eframe::egui;
 use egui::{Align2, Color32, CornerRadius, FontId, Frame, Margin, Pos2, Sense, Stroke, Vec2};
 use serde::{Deserialize, Serialize};
@@ -84,6 +84,7 @@ impl DisplayMode {
 struct ClockApp {
     always_on_top: bool,
     display_mode: DisplayMode,
+    show_seconds: bool,
     // These fields are runtime-only and must not be persisted
     #[serde(skip)]
     applied_always_on_top: Option<bool>,
@@ -108,10 +109,20 @@ impl eframe::App for ClockApp {
 
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         let now = Local::now();
-        let ms_remaining = 1000 - now.timestamp_subsec_millis();
-        ctx.request_repaint_after(Duration::from_millis(ms_remaining.min(500) as u64));
+        let repaint_ms = if self.show_seconds {
+            1000 - now.timestamp_subsec_millis() as u64
+        } else {
+            let ms_into_minute =
+                now.second() as u64 * 1000 + now.timestamp_subsec_millis() as u64;
+            60_000u64.saturating_sub(ms_into_minute).max(1)
+        };
+        ctx.request_repaint_after(Duration::from_millis(repaint_ms));
 
-        let time_str = now.format("%H:%M:%S").to_string();
+        let time_str = if self.show_seconds {
+            now.format("%H:%M:%S").to_string()
+        } else {
+            now.format("%H:%M").to_string()
+        };
         let date_str = now.format("%a, %b %d %Y").to_string();
 
         if self.applied_always_on_top != Some(self.always_on_top) {
@@ -247,6 +258,11 @@ impl eframe::App for ClockApp {
             if should_exit {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
             }
+        }
+
+        // Left-click toggles seconds display (guard against clicks that dismiss the menu)
+        if self.popup_pos.is_none() && ctx.input(|i| i.pointer.primary_clicked()) {
+            self.show_seconds = !self.show_seconds;
         }
     }
 }
