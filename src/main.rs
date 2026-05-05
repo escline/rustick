@@ -5,6 +5,8 @@ use eframe::egui;
 use egui::{Align2, Color32, CornerRadius, FontId, Frame, Margin, Pos2, Sense, Stroke, Vec2};
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
+use tray_icon::menu::{Menu, MenuEvent, MenuItem};
+use tray_icon::{MouseButton, TrayIconBuilder, TrayIconEvent};
 
 // --- Color scheme ---
 
@@ -107,6 +109,43 @@ fn read_light_mode() -> bool {
     .unwrap_or(false)
 }
 
+// --- System tray ---
+
+struct TrayHandle {
+    _tray: tray_icon::TrayIcon,
+    exit_id: tray_icon::menu::MenuId,
+}
+
+fn load_tray_icon() -> tray_icon::Icon {
+    #[cfg(has_icon_png)]
+    {
+        let bytes = include_bytes!("../assets/icon.png");
+        if let Ok(img) = image::load_from_memory(bytes) {
+            let img = img.into_rgba8();
+            let (w, h) = (img.width(), img.height());
+            if let Ok(icon) = tray_icon::Icon::from_rgba(img.into_raw(), w, h) {
+                return icon;
+            }
+        }
+    }
+    let rgba: Vec<u8> = (0..16 * 16).flat_map(|_| [225u8, 88, 20, 255]).collect();
+    tray_icon::Icon::from_rgba(rgba, 16, 16).expect("fallback tray icon")
+}
+
+fn init_tray() -> Option<TrayHandle> {
+    let exit_item = MenuItem::new("Exit Rustick", true, None);
+    let exit_id = exit_item.id().clone();
+    let menu = Menu::new();
+    menu.append(&exit_item).ok()?;
+    let tray = TrayIconBuilder::new()
+        .with_icon(load_tray_icon())
+        .with_tooltip("Rustick")
+        .with_menu(Box::new(menu))
+        .build()
+        .ok()?;
+    Some(TrayHandle { _tray: tray, exit_id })
+}
+
 // --- Icon loading ---
 
 #[cfg(has_icon_png)]
@@ -131,7 +170,8 @@ fn main() -> eframe::Result<()> {
             let mut vp = egui::ViewportBuilder::default()
                 .with_title("Rustick")
                 .with_inner_size([320.0, 140.0])
-                .with_min_inner_size([240.0, 100.0]);
+                .with_min_inner_size([240.0, 100.0])
+                .with_taskbar(false);
             if let Some(icon) = load_icon() {
                 vp = vp.with_icon(icon);
             }
@@ -195,6 +235,8 @@ struct ClockApp {
     popup_frames: u32,
     #[serde(skip)]
     colors: Option<ColorScheme>,
+    #[serde(skip)]
+    tray: Option<TrayHandle>,
 }
 
 #[derive(Clone, Copy)]
@@ -227,6 +269,22 @@ impl eframe::App for ClockApp {
         let date_str = now.format("%a, %b %d %Y").to_string();
 
         let colors = *self.colors.get_or_insert_with(ColorScheme::from_windows);
+
+        if self.tray.is_none() {
+            self.tray = init_tray();
+        }
+        if let Some(ref tray_handle) = self.tray {
+            while let Ok(event) = MenuEvent::receiver().try_recv() {
+                if event.id == tray_handle.exit_id {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                }
+            }
+            while let Ok(event) = TrayIconEvent::receiver().try_recv() {
+                if let TrayIconEvent::Click { button: MouseButton::Left, .. } = event {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+                }
+            }
+        }
 
         if self.applied_always_on_top != Some(self.always_on_top) {
             ctx.send_viewport_cmd(egui::ViewportCommand::WindowLevel(

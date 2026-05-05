@@ -5,7 +5,11 @@
       "mcp__context7__query-docs",
       "Bash(cargo build *)",
       "WebSearch",
-      "WebFetch(domain:docs.rs)"
+      "WebFetch(domain:docs.rs)",
+      "Bash(cargo search *)",
+      "Bash(cargo add *)",
+      "Bash(curl -s \"https://docs.rs/tray-icon/0.23.1/tray_icon/\")",
+      "Bash(cargo fetch *)"
     ]
   }
 }
